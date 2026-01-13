@@ -5,4 +5,8 @@ pub(crate) enum StatusAccountDisplay {
         plan: Option<String>,
     },
     ApiKey,
+    AzureAad {
+        email: Option<String>,
+        tenant_id: String,
+    },
 }

@@ -333,6 +333,10 @@ impl HistoryCell for StatusHistoryCell {
             StatusAccountDisplay::ApiKey => {
                 "API key configured (run codex login to use ChatGPT)".to_string()
             }
+            StatusAccountDisplay::AzureAad { email, tenant_id } => match email {
+                Some(email) => format!("{email} (Azure AD: {tenant_id})"),
+                None => format!("Azure AD ({tenant_id})"),
+            },
         });
 
         let mut labels: Vec<String> =

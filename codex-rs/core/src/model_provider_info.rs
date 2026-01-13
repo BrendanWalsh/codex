@@ -47,6 +47,31 @@ pub enum WireApi {
     Chat,
 }
 
+/// Authentication method for a model provider.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderAuthMethod {
+    /// No authentication required, or use env_key if specified.
+    #[default]
+    None,
+    /// OpenAI API key or ChatGPT OAuth authentication.
+    OpenAI,
+    /// Azure Active Directory authentication for Azure AI Foundry.
+    AzureAad,
+}
+
+/// Azure AAD configuration for providers that use AAD authentication.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+pub struct AzureAadConfig {
+    /// Azure tenant ID (e.g., "common", "organizations", or a specific tenant GUID).
+    /// Defaults to "common" if not specified.
+    pub tenant_id: Option<String>,
+    /// Azure application (client) ID for authentication.
+    pub client_id: Option<String>,
+    /// The Azure resource scope (defaults to "https://cognitiveservices.azure.com/.default").
+    pub scope: Option<String>,
+}
+
 /// Serializable representation of a provider definition.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ModelProviderInfo {
@@ -99,6 +124,15 @@ pub struct ModelProviderInfo {
     /// and API key (if needed) comes from the "env_key" environment variable.
     #[serde(default)]
     pub requires_openai_auth: bool,
+
+    /// Authentication method for this provider.
+    /// This is a more flexible alternative to `requires_openai_auth`.
+    #[serde(default)]
+    pub auth_method: ProviderAuthMethod,
+
+    /// Azure AAD configuration (required when auth_method is AzureAad).
+    #[serde(default)]
+    pub azure_aad: Option<AzureAadConfig>,
 }
 
 impl ModelProviderInfo {
@@ -210,6 +244,25 @@ impl ModelProviderInfo {
             .map(Duration::from_millis)
             .unwrap_or(Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS))
     }
+    /// Get the effective authentication method for this provider.
+    pub fn effective_auth_method(&self) -> ProviderAuthMethod {
+        // If auth_method is explicitly set to something other than None, use it
+        if self.auth_method != ProviderAuthMethod::None {
+            return self.auth_method;
+        }
+        // Otherwise, fall back to the legacy requires_openai_auth flag
+        if self.requires_openai_auth {
+            ProviderAuthMethod::OpenAI
+        } else {
+            ProviderAuthMethod::None
+        }
+    }
+
+    /// Check if this provider uses Azure AAD authentication.
+    pub fn uses_azure_aad(&self) -> bool {
+        self.effective_auth_method() == ProviderAuthMethod::AzureAad
+    }
+
     pub fn create_openai_provider() -> ModelProviderInfo {
         ModelProviderInfo {
             name: OPENAI_PROVIDER_NAME.into(),
@@ -247,6 +300,8 @@ impl ModelProviderInfo {
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: true,
+            auth_method: ProviderAuthMethod::OpenAI,
+            azure_aad: None,
         }
     }
 
@@ -320,6 +375,8 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
+        auth_method: ProviderAuthMethod::None,
+        azure_aad: None,
     }
 }
 
@@ -348,6 +405,8 @@ base_url = "http://localhost:11434/v1"
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            auth_method: ProviderAuthMethod::None,
+            azure_aad: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -378,10 +437,52 @@ query_params = { api-version = "2025-04-01-preview" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            auth_method: ProviderAuthMethod::None,
+            azure_aad: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
         assert_eq!(expected_provider, provider);
+    }
+
+    #[test]
+    fn test_deserialize_azure_aad_model_provider_toml() {
+        let azure_aad_toml = r#"
+name = "Azure AI Foundry"
+base_url = "https://my-resource.openai.azure.com/openai"
+wire_api = "responses"
+auth_method = "azure_aad"
+
+[azure_aad]
+tenant_id = "my-tenant-id"
+client_id = "my-client-id"
+scope = "https://cognitiveservices.azure.com/.default"
+        "#;
+        let expected_provider = ModelProviderInfo {
+            name: "Azure AI Foundry".into(),
+            base_url: Some("https://my-resource.openai.azure.com/openai".into()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+            auth_method: ProviderAuthMethod::AzureAad,
+            azure_aad: Some(AzureAadConfig {
+                tenant_id: Some("my-tenant-id".into()),
+                client_id: Some("my-client-id".into()),
+                scope: Some("https://cognitiveservices.azure.com/.default".into()),
+            }),
+        };
+
+        let provider: ModelProviderInfo = toml::from_str(azure_aad_toml).unwrap();
+        assert_eq!(expected_provider, provider);
+        assert!(provider.uses_azure_aad());
     }
 
     #[test]
@@ -411,6 +512,8 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            auth_method: ProviderAuthMethod::None,
+            azure_aad: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -442,6 +545,8 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
+                auth_method: ProviderAuthMethod::None,
+                azure_aad: None,
             };
             let api = provider.to_api_provider(None).expect("api provider");
             assert!(
@@ -464,6 +569,8 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            auth_method: ProviderAuthMethod::None,
+            azure_aad: None,
         };
         let named_api = named_provider.to_api_provider(None).expect("api provider");
         assert!(named_api.is_azure_responses_endpoint());
@@ -488,6 +595,8 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
+                auth_method: ProviderAuthMethod::None,
+                azure_aad: None,
             };
             let api = provider.to_api_provider(None).expect("api provider");
             assert!(

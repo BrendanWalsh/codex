@@ -778,6 +778,16 @@ pub enum Account {
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
     Chatgpt { email: String, plan_type: PlanType },
+
+    /// Azure Active Directory authentication for Azure AI Foundry
+    #[serde(rename = "azure_aad", rename_all = "camelCase")]
+    #[ts(rename = "azure_aad", rename_all = "camelCase")]
+    AzureAad {
+        /// The Azure tenant ID
+        tenant_id: String,
+        /// The user's email or UPN from the AAD token
+        email: Option<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -795,6 +805,23 @@ pub enum LoginAccountParams {
     #[serde(rename = "chatgpt")]
     #[ts(rename = "chatgpt")]
     Chatgpt,
+    /// Azure Active Directory authentication for Azure AI Foundry
+    #[serde(rename = "azure_aad", rename_all = "camelCase")]
+    #[ts(rename = "azure_aad", rename_all = "camelCase")]
+    AzureAad {
+        /// Azure tenant ID (e.g., "common", "organizations", or a specific tenant GUID)
+        #[serde(rename = "tenantId")]
+        #[ts(rename = "tenantId")]
+        tenant_id: String,
+        /// Azure client ID for the application
+        #[serde(rename = "clientId")]
+        #[ts(rename = "clientId")]
+        client_id: String,
+        /// The Azure AI Foundry resource endpoint URL
+        #[serde(rename = "resourceUrl")]
+        #[ts(rename = "resourceUrl")]
+        resource_url: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -813,6 +840,22 @@ pub enum LoginAccountResponse {
         login_id: String,
         /// URL the client should open in a browser to initiate the OAuth flow.
         auth_url: String,
+    },
+    /// Azure AD device code flow response
+    #[serde(rename = "azure_aad", rename_all = "camelCase")]
+    #[ts(rename = "azure_aad", rename_all = "camelCase")]
+    AzureAad {
+        login_id: String,
+        /// URL the user should visit to enter the device code
+        verification_url: String,
+        /// The user code to enter at the verification URL
+        user_code: String,
+        /// Message to display to the user
+        message: String,
+        /// Polling interval in seconds
+        interval: u64,
+        /// Expiration time in seconds
+        expires_in: u64,
     },
 }
 

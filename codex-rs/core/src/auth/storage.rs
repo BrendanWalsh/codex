@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::warn;
 
+use crate::aad_token_data::AadTokenData;
 use crate::token_data::TokenData;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
@@ -44,6 +45,10 @@ pub struct AuthDotJson {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh: Option<DateTime<Utc>>,
+
+    /// Azure Active Directory tokens for Azure AI Foundry authentication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aad_tokens: Option<AadTokenData>,
 }
 
 pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {
@@ -298,6 +303,7 @@ mod tests {
             openai_api_key: Some("test-key".to_string()),
             tokens: None,
             last_refresh: Some(Utc::now()),
+            aad_tokens: None,
         };
 
         storage
@@ -317,6 +323,7 @@ mod tests {
             openai_api_key: Some("test-key".to_string()),
             tokens: None,
             last_refresh: Some(Utc::now()),
+            aad_tokens: None,
         };
 
         let file = get_auth_file(codex_home.path());
@@ -338,6 +345,7 @@ mod tests {
             openai_api_key: Some("sk-test-key".to_string()),
             tokens: None,
             last_refresh: None,
+            aad_tokens: None,
         };
         let storage = create_auth_storage(dir.path().to_path_buf(), AuthCredentialsStoreMode::File);
         storage.save(&auth_dot_json)?;
@@ -432,6 +440,7 @@ mod tests {
                 account_id: Some(format!("{prefix}-account-id")),
             }),
             last_refresh: None,
+            aad_tokens: None,
         }
     }
 
@@ -447,6 +456,7 @@ mod tests {
             openai_api_key: Some("sk-test".to_string()),
             tokens: None,
             last_refresh: None,
+            aad_tokens: None,
         };
         seed_keyring_with_auth(
             &mock_keyring,
@@ -488,6 +498,7 @@ mod tests {
                 account_id: Some("account".to_string()),
             }),
             last_refresh: Some(Utc::now()),
+            aad_tokens: None,
         };
 
         storage.save(&auth)?;

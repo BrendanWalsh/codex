@@ -69,6 +69,9 @@ pub enum SandboxMode {
 pub enum ForcedLoginMethod {
     Chatgpt,
     Api,
+    /// Force Azure Active Directory authentication for Azure AI Foundry.
+    #[serde(rename = "azure_aad")]
+    AzureAad,
 }
 
 /// Represents the trust level for a project directory.

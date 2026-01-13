@@ -28,6 +28,9 @@ impl GitSha {
 pub enum AuthMode {
     ApiKey,
     ChatGPT,
+    /// Azure Active Directory authentication for Azure AI Foundry
+    #[serde(rename = "azure_aad")]
+    AzureAad,
 }
 
 /// Generates an `enum ClientRequest` where each variant is a request that the

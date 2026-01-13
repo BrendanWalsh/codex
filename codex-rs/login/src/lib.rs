@@ -1,7 +1,15 @@
+mod aad_device_code_auth;
 mod device_code_auth;
 mod pkce;
 mod server;
 
+pub use aad_device_code_auth::AadDeviceCode;
+pub use aad_device_code_auth::AadDeviceCodeConfig;
+pub use aad_device_code_auth::complete_aad_device_code_login;
+pub use aad_device_code_auth::print_aad_device_code_prompt;
+pub use aad_device_code_auth::refresh_aad_token;
+pub use aad_device_code_auth::request_aad_device_code;
+pub use aad_device_code_auth::run_aad_device_code_login;
 pub use device_code_auth::DeviceCode;
 pub use device_code_auth::complete_device_code_login;
 pub use device_code_auth::request_device_code;
@@ -15,10 +23,12 @@ pub use server::run_login_server;
 pub use codex_app_server_protocol::AuthMode;
 pub use codex_core::AuthManager;
 pub use codex_core::CodexAuth;
+pub use codex_core::aad_token_data::AadTokenData;
 pub use codex_core::auth::AuthDotJson;
 pub use codex_core::auth::CLIENT_ID;
 pub use codex_core::auth::CODEX_API_KEY_ENV_VAR;
 pub use codex_core::auth::OPENAI_API_KEY_ENV_VAR;
+pub use codex_core::auth::login_with_aad_tokens;
 pub use codex_core::auth::login_with_api_key;
 pub use codex_core::auth::logout;
 pub use codex_core::auth::save_auth;

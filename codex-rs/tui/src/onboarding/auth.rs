@@ -131,6 +131,9 @@ impl KeyboardHandler for AuthModeWidget {
                         AuthMode::ApiKey => {
                             self.disallow_api_login();
                         }
+                        AuthMode::AzureAad => {
+                            // Azure AAD is not yet supported in the TUI onboarding flow
+                        }
                     },
                     SignInState::ChatGptSuccessMessage => {
                         *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;

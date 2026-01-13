@@ -1,12 +1,16 @@
 use codex_app_server_protocol::AuthMode;
 use codex_common::CliConfigOverrides;
 use codex_core::CodexAuth;
+use codex_core::ProviderAuthMethod;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
+use codex_core::auth::login_with_aad_tokens;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::logout;
 use codex_core::config::Config;
+use codex_login::AadDeviceCodeConfig;
 use codex_login::ServerOptions;
+use codex_login::run_aad_device_code_login;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -221,6 +225,65 @@ pub async fn run_login_with_device_code_fallback_to_browser(
     }
 }
 
+/// Login using Azure AD device code flow.
+pub async fn run_login_with_aad(cli_config_overrides: CliConfigOverrides) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+
+    // Get Azure AD config from the model provider
+    let provider = &config.model_provider;
+
+    if provider.auth_method != ProviderAuthMethod::AzureAad {
+        eprintln!("Azure AD login requires auth_method = \"azure_aad\" in your model provider configuration.");
+        std::process::exit(1);
+    }
+
+    let aad_config = match &provider.azure_aad {
+        Some(aad) => aad,
+        None => {
+            eprintln!("Azure AD configuration is missing. Please add [model_providers.<name>.azure_aad] section to your config.");
+            std::process::exit(1);
+        }
+    };
+
+    let tenant_id = match &aad_config.tenant_id {
+        Some(t) => t.clone(),
+        None => {
+            eprintln!("Azure AD tenant_id is required. Please set it in your config.");
+            std::process::exit(1);
+        }
+    };
+
+    let client_id = aad_config
+        .client_id
+        .clone()
+        .unwrap_or_else(|| "04b07795-8ddb-461a-bbee-02f9e1bf7b46".to_string()); // Azure CLI default
+
+    let aad_device_config = AadDeviceCodeConfig::for_ai_foundry(tenant_id, client_id);
+
+    match run_aad_device_code_login(aad_device_config).await {
+        Ok(token_data) => {
+            match login_with_aad_tokens(
+                &config.codex_home,
+                token_data,
+                config.cli_auth_credentials_store_mode,
+            ) {
+                Ok(_) => {
+                    eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("Error saving Azure AD credentials: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Error logging in with Azure AD: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
@@ -239,6 +302,26 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
             AuthMode::ChatGPT => {
                 eprintln!("Logged in using ChatGPT");
                 std::process::exit(0);
+            }
+            AuthMode::AzureAad => {
+                match auth.get_aad_token_data() {
+                    Ok(aad_token) => {
+                        let email_info = aad_token
+                            .token_info
+                            .email
+                            .map(|e| format!(" ({e})"))
+                            .unwrap_or_default();
+                        eprintln!(
+                            "Logged in using Azure AD - tenant: {}{}",
+                            aad_token.tenant_id, email_info
+                        );
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("Unexpected error retrieving Azure AD token: {e}");
+                        std::process::exit(1);
+                    }
+                }
             }
         },
         Ok(None) => {

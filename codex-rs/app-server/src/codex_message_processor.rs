@@ -550,6 +550,21 @@ impl CodexMessageProcessor {
             LoginAccountParams::Chatgpt => {
                 self.login_chatgpt_v2(request_id).await;
             }
+            LoginAccountParams::AzureAad {
+                tenant_id,
+                client_id,
+                resource_url,
+            } => {
+                // Azure AAD login is not yet implemented in the app server
+                // For now, return an error indicating it's not supported
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: "Azure AAD login is not yet supported via the app server. Please use the CLI directly.".to_string(),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                let _ = (tenant_id, client_id, resource_url); // Suppress unused warnings
+            }
         }
     }
 
@@ -1060,6 +1075,24 @@ impl CodexMessageProcessor {
                             self.outgoing.send_error(request_id, error).await;
                             return;
                         }
+                    }
+                }
+                AuthMode::AzureAad => {
+                    let aad_token = match auth.get_aad_token_data() {
+                        Ok(token) => token,
+                        Err(_) => {
+                            let error = JSONRPCErrorError {
+                                code: INVALID_REQUEST_ERROR_CODE,
+                                message: "Azure AAD token data is not available".to_string(),
+                                data: None,
+                            };
+                            self.outgoing.send_error(request_id, error).await;
+                            return;
+                        }
+                    };
+                    Account::AzureAad {
+                        tenant_id: aad_token.tenant_id,
+                        email: aad_token.token_info.email,
                     }
                 }
             }),

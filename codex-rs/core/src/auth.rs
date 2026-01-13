@@ -114,6 +114,24 @@ impl CodexAuth {
                 let id_token = self.get_token_data()?.access_token;
                 Ok(id_token)
             }
+            AuthMode::AzureAad => {
+                let aad_token = self.get_aad_token_data()?;
+                Ok(aad_token.access_token)
+            }
+        }
+    }
+
+    /// Get the AAD token data for Azure authentication.
+    pub fn get_aad_token_data(
+        &self,
+    ) -> Result<crate::aad_token_data::AadTokenData, std::io::Error> {
+        let auth_dot_json: Option<AuthDotJson> = self.get_current_auth_json();
+        match auth_dot_json {
+            Some(AuthDotJson {
+                aad_tokens: Some(aad_tokens),
+                ..
+            }) => Ok(aad_tokens),
+            _ => Err(std::io::Error::other("AAD token data is not available.")),
         }
     }
 
@@ -168,6 +186,7 @@ impl CodexAuth {
                 account_id: Some("account_id".to_string()),
             }),
             last_refresh: Some(Utc::now()),
+            aad_tokens: None,
         };
 
         let auth_dot_json = Arc::new(Mutex::new(Some(auth_dot_json)));
@@ -232,6 +251,22 @@ pub fn login_with_api_key(
         openai_api_key: Some(api_key.to_string()),
         tokens: None,
         last_refresh: None,
+        aad_tokens: None,
+    };
+    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
+}
+
+/// Writes an `auth.json` that contains Azure AAD tokens.
+pub fn login_with_aad_tokens(
+    codex_home: &Path,
+    aad_tokens: crate::aad_token_data::AadTokenData,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<()> {
+    let auth_dot_json = AuthDotJson {
+        openai_api_key: None,
+        tokens: None,
+        last_refresh: Some(Utc::now()),
+        aad_tokens: Some(aad_tokens),
     };
     save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
 }
@@ -273,12 +308,29 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
         let method_violation = match (required_method, auth.mode) {
             (ForcedLoginMethod::Api, AuthMode::ApiKey) => None,
             (ForcedLoginMethod::Chatgpt, AuthMode::ChatGPT) => None,
+            (ForcedLoginMethod::AzureAad, AuthMode::AzureAad) => None,
             (ForcedLoginMethod::Api, AuthMode::ChatGPT) => Some(
                 "API key login is required, but ChatGPT is currently being used. Logging out."
                     .to_string(),
             ),
+            (ForcedLoginMethod::Api, AuthMode::AzureAad) => Some(
+                "API key login is required, but Azure AAD is currently being used. Logging out."
+                    .to_string(),
+            ),
             (ForcedLoginMethod::Chatgpt, AuthMode::ApiKey) => Some(
                 "ChatGPT login is required, but an API key is currently being used. Logging out."
+                    .to_string(),
+            ),
+            (ForcedLoginMethod::Chatgpt, AuthMode::AzureAad) => Some(
+                "ChatGPT login is required, but Azure AAD is currently being used. Logging out."
+                    .to_string(),
+            ),
+            (ForcedLoginMethod::AzureAad, AuthMode::ApiKey) => Some(
+                "Azure AAD login is required, but an API key is currently being used. Logging out."
+                    .to_string(),
+            ),
+            (ForcedLoginMethod::AzureAad, AuthMode::ChatGPT) => Some(
+                "Azure AAD login is required, but ChatGPT is currently being used. Logging out."
                     .to_string(),
             ),
         };
@@ -370,11 +422,28 @@ fn load_auth(
         openai_api_key: auth_json_api_key,
         tokens,
         last_refresh,
+        aad_tokens,
     } = auth_dot_json;
 
     // Prefer AuthMode.ApiKey if it's set in the auth.json.
     if let Some(api_key) = &auth_json_api_key {
         return Ok(Some(CodexAuth::from_api_key_with_client(api_key, client)));
+    }
+
+    // Check for Azure AAD tokens.
+    if aad_tokens.is_some() {
+        return Ok(Some(CodexAuth {
+            api_key: None,
+            mode: AuthMode::AzureAad,
+            storage: storage.clone(),
+            auth_dot_json: Arc::new(Mutex::new(Some(AuthDotJson {
+                openai_api_key: None,
+                tokens: None,
+                last_refresh,
+                aad_tokens,
+            }))),
+            client,
+        }));
     }
 
     Ok(Some(CodexAuth {
@@ -385,6 +454,7 @@ fn load_auth(
             openai_api_key: None,
             tokens,
             last_refresh,
+            aad_tokens: None,
         }))),
         client,
     }))
@@ -587,7 +657,7 @@ impl UnauthorizedRecovery {
         if !self
             .manager
             .auth_cached()
-            .is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
+            .is_some_and(|auth| auth.mode == AuthMode::ChatGPT || auth.mode == AuthMode::AzureAad)
         {
             return false;
         }
@@ -824,28 +894,48 @@ impl AuthManager {
     }
 
     async fn refresh_if_stale(&self, auth: &CodexAuth) -> Result<bool, RefreshTokenError> {
-        if auth.mode != AuthMode::ChatGPT {
-            return Ok(false);
-        }
+        match auth.mode {
+            AuthMode::ApiKey => return Ok(false),
+            AuthMode::ChatGPT => {
+                let auth_dot_json = match auth.get_current_auth_json() {
+                    Some(auth_dot_json) => auth_dot_json,
+                    None => return Ok(false),
+                };
+                let tokens = match auth_dot_json.tokens {
+                    Some(tokens) => tokens,
+                    None => return Ok(false),
+                };
+                let last_refresh = match auth_dot_json.last_refresh {
+                    Some(last_refresh) => last_refresh,
+                    None => return Ok(false),
+                };
+                if last_refresh >= Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL) {
+                    return Ok(false);
+                }
+                self.refresh_tokens(auth, tokens.refresh_token).await?;
+                self.reload();
+                Ok(true)
+            }
+            AuthMode::AzureAad => {
+                // For AAD tokens, check if they're expired and need refresh
+                let aad_token = match auth.get_aad_token_data() {
+                    Ok(token) => token,
+                    Err(_) => return Ok(false),
+                };
 
-        let auth_dot_json = match auth.get_current_auth_json() {
-            Some(auth_dot_json) => auth_dot_json,
-            None => return Ok(false),
-        };
-        let tokens = match auth_dot_json.tokens {
-            Some(tokens) => tokens,
-            None => return Ok(false),
-        };
-        let last_refresh = match auth_dot_json.last_refresh {
-            Some(last_refresh) => last_refresh,
-            None => return Ok(false),
-        };
-        if last_refresh >= Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL) {
-            return Ok(false);
+                if !aad_token.is_expired() {
+                    return Ok(false);
+                }
+
+                // If token is expired but we have a refresh token, try to refresh
+                if aad_token.can_refresh() {
+                    // Note: AAD token refresh is handled separately via the login crate
+                    // This just indicates that a refresh is needed
+                    tracing::info!("AAD token is expired and needs refresh");
+                }
+                Ok(false)
+            }
         }
-        self.refresh_tokens(auth, tokens.refresh_token).await?;
-        self.reload();
-        Ok(true)
     }
 
     async fn refresh_tokens(
@@ -1004,6 +1094,7 @@ mod tests {
                     account_id: None,
                 }),
                 last_refresh: Some(last_refresh),
+                aad_tokens: None,
             },
             auth_dot_json
         );
@@ -1036,6 +1127,7 @@ mod tests {
             openai_api_key: Some("sk-test-key".to_string()),
             tokens: None,
             last_refresh: None,
+            aad_tokens: None,
         };
         super::save_auth(dir.path(), &auth_dot_json, AuthCredentialsStoreMode::File)?;
         let auth_file = get_auth_file(dir.path());

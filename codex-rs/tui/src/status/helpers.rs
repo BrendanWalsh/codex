@@ -99,6 +99,13 @@ pub(crate) fn compose_account_display(
             Some(StatusAccountDisplay::ChatGpt { email, plan })
         }
         AuthMode::ApiKey => Some(StatusAccountDisplay::ApiKey),
+        AuthMode::AzureAad => {
+            let aad_token = auth.get_aad_token_data().ok()?;
+            Some(StatusAccountDisplay::AzureAad {
+                email: aad_token.token_info.email,
+                tenant_id: aad_token.tenant_id,
+            })
+        }
     }
 }
 
